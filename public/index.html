@@ -60,7 +60,10 @@
       <button class="export-btn" id="export-data-btn">↑ Export Data</button>
       <div class="user-chip">
         <div class="user-avatar" id="user-avatar">?</div>
-        <span class="user-name" id="user-name">Loading…</span>
+        <div style="display:flex;flex-direction:column;gap:2px;line-height:1">
+          <span class="user-name" id="user-name">Loading…</span>
+          <span id="user-role-badge" style="display:none;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:1px 7px;border-radius:99px;"></span>
+        </div>
       </div>
       <a href="/auth/logout" class="logout-btn" id="logout-btn">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -1678,15 +1681,31 @@
           posthog.identify(String(u.id), {
             name:        u.name  || u.email || 'User',
             email:       u.email,
-            auth_method: u.auth_method
+            auth_method: u.auth_method,
+            role:        u.role,
           });
 
           // Populate header user chip
           const displayName = u.name || u.email || 'User';
-          const avatarEl = document.getElementById('user-avatar');
-          const nameEl   = document.getElementById('user-name');
+          const avatarEl  = document.getElementById('user-avatar');
+          const nameEl    = document.getElementById('user-name');
+          const roleEl    = document.getElementById('user-role-badge');
           if (avatarEl) avatarEl.textContent = displayName.charAt(0).toUpperCase();
           if (nameEl)   nameEl.textContent   = displayName.split(' ')[0];
+          if (roleEl && u.role) {
+            const ROLE_COLORS = {
+              admin:       '#6366f1',
+              radiologist: '#0284c7',
+              technician:  '#059669',
+              frontdesk:   '#d97706',
+              manager:     '#dc2626',
+            };
+            const c = ROLE_COLORS[u.role] || '#64748b';
+            roleEl.textContent       = u.role;
+            roleEl.style.background  = c + '22';
+            roleEl.style.color       = c;
+            roleEl.style.display     = 'inline-block';
+          }
         })
         .catch(() => {});
 

@@ -22,3 +22,14 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
 
 -- Phase B: local email+password auth
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT NULL;
+
+-- Phase C: role-based differentiation
+DO $$ BEGIN
+  CREATE TYPE user_role AS ENUM ('admin','radiologist','technician','frontdesk','manager');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS role user_role NOT NULL DEFAULT 'frontdesk';
+
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);

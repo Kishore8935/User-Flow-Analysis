@@ -108,13 +108,25 @@ async function createLocalUser(email, passwordHash) {
 }
 
 /**
- * Return all users — for an admin view (Phase 5 optional).
+ * Return all users — for the admin user-management view.
  */
 async function getAllUsers() {
   const { rows } = await pool.query(
-    'SELECT id, name, email, oauth_provider, last_login, created_at FROM users ORDER BY created_at DESC'
+    'SELECT id, name, email, oauth_provider, role, last_login, created_at FROM users ORDER BY created_at DESC'
   );
   return rows;
+}
+
+/**
+ * Update the role of a single user.
+ * Returns the updated { id, role } row, or null if the user doesn't exist.
+ */
+async function setUserRole(userId, role) {
+  const { rows } = await pool.query(
+    `UPDATE users SET role = $1 WHERE id = $2 RETURNING id, role`,
+    [role, userId]
+  );
+  return rows[0] || null;
 }
 
 // ── Analytics helpers ─────────────────────────────────────────
@@ -147,5 +159,5 @@ async function upsertAnalyticsSession({ session_id, user_id, auth_method, sectio
 
 module.exports = {
   query, testConnection, upsertUser, findUserById, findUserByEmail,
-  createLocalUser, getAllUsers, insertAnalyticsEvent, upsertAnalyticsSession, pool
+  createLocalUser, getAllUsers, setUserRole, insertAnalyticsEvent, upsertAnalyticsSession, pool
 };

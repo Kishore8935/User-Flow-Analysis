@@ -43,6 +43,14 @@ function requireAuth(req, res, next) {
   res.redirect('/login');
 }
 
+// Requires the logged-in user to have the 'admin' role
+function requireAdmin(req, res, next) {
+  if (req.isAuthenticated() && req.user.role === 'admin') return next();
+  res.status(403).json({ error: 'Admin access required' });
+}
+
+const VALID_ROLES = ['admin', 'radiologist', 'technician', 'frontdesk', 'manager'];
+
 // ── Health check ──────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
   try {
@@ -117,8 +125,28 @@ app.post('/auth/register', async (req, res, next) => {
 
 // GET /api/me — returns current logged-in user (used by the frontend)
 app.get('/api/me', requireAuth, (req, res) => {
-  const { id, name, email, avatar_url, oauth_provider } = req.user;
-  res.json({ id, name, email, avatar_url, auth_method: oauth_provider === 'local' ? 'credentials' : oauth_provider });
+  const { id, name, email, avatar_url, oauth_provider, role } = req.user;
+  res.json({ id, name, email, avatar_url, role,
+    auth_method: oauth_provider === 'local' ? 'credentials' : oauth_provider });
+});
+
+// GET /api/admin/users — list all users with roles (admin only)
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    res.json(await db.getAllUsers());
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/admin/users/:id/role — change a user's role (admin only)
+app.patch('/api/admin/users/:id/role', requireAuth, requireAdmin, async (req, res, next) => {
+  const userId = parseInt(req.params.id, 10);
+  const { role } = req.body;
+  if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${VALID_ROLES.join(', ')}` });
+  try {
+    const updated = await db.setUserRole(userId, role);
+    if (!updated) return res.status(404).json({ error: 'User not found' });
+    res.json(updated);
+  } catch (err) { next(err); }
 });
 
 // Analytics routes — no auth required so tracker can fire on page unload too

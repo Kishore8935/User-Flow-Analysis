@@ -181,6 +181,7 @@ def get_all_user_flows():
             seqs.depth,
             COALESCE(u.name, u.email, 'User #' || u.id::text)                   AS user_label,
             s.auth_method,
+            COALESCE(u.role::text, 'unknown')                                    AS role,
             TO_CHAR(s.started_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI') AS started_fmt,
             s.started_at
         FROM seqs
@@ -212,6 +213,57 @@ def get_dropoff_stats():
         JOIN analytics_sessions s ON s.session_id = le.session_id
         GROUP BY le.section
         ORDER BY sessions DESC
+    """)
+
+
+def get_role_stats():
+    """Per-role summary: session count, unique users, avg session duration, avg path depth."""
+    return _query("""
+        SELECT
+            u.role::text                                                               AS role,
+            COUNT(DISTINCT s.session_id)                                               AS sessions,
+            COUNT(DISTINCT s.user_id)                                                  AS users,
+            ROUND(AVG(
+                EXTRACT(EPOCH FROM (s.last_seen_at - s.started_at)) / 60.0
+            ), 1)                                                                       AS avg_min,
+            ROUND(AVG(array_length(s.section_flow, 1)), 1)                             AS avg_depth
+        FROM analytics_sessions s
+        JOIN users u ON u.id = s.user_id
+        GROUP BY u.role
+        ORDER BY sessions DESC
+    """)
+
+
+def get_role_section_time():
+    """Average seconds per section broken down by role — feeds the role × section heatmap."""
+    return _query("""
+        SELECT
+            u.role::text                                         AS role,
+            e.section,
+            ROUND(AVG(e.time_spent_ms) / 1000.0, 1)             AS avg_sec,
+            COUNT(*)                                             AS visits
+        FROM analytics_events e
+        JOIN analytics_sessions s ON s.session_id = e.session_id
+        JOIN users u ON u.id = s.user_id
+        WHERE e.event = 'section_exit'
+          AND e.time_spent_ms IS NOT NULL
+        GROUP BY u.role, e.section
+        ORDER BY u.role, avg_sec DESC
+    """)
+
+
+def get_role_depth():
+    """Session path depth distribution broken down by role."""
+    return _query("""
+        SELECT
+            u.role::text                          AS role,
+            array_length(s.section_flow, 1)       AS depth,
+            COUNT(*)                               AS sessions
+        FROM analytics_sessions s
+        JOIN users u ON u.id = s.user_id
+        WHERE array_length(s.section_flow, 1) IS NOT NULL
+        GROUP BY u.role, depth
+        ORDER BY u.role, depth
     """)
 
 

@@ -238,7 +238,24 @@ app.layout = dbc.Container([
                             clearable=False,
                             style=DROPDOWN_STYLE,
                         ),
-                    ], md=3),
+                    ], md=2),
+                    dbc.Col([
+                        html.Label('Role', style=LABEL_STYLE),
+                        dcc.Dropdown(
+                            id='allflow-role-filter',
+                            options=[
+                                {'label': 'All Roles',    'value': 'all'},
+                                {'label': 'Admin',        'value': 'admin'},
+                                {'label': 'Radiologist',  'value': 'radiologist'},
+                                {'label': 'Technician',   'value': 'technician'},
+                                {'label': 'Front Desk',   'value': 'frontdesk'},
+                                {'label': 'Manager',      'value': 'manager'},
+                            ],
+                            value='all',
+                            clearable=False,
+                            style=DROPDOWN_STYLE,
+                        ),
+                    ], md=2),
                     dbc.Col([
                         html.Label('Sort By', style=LABEL_STYLE),
                         dcc.Dropdown(
@@ -339,6 +356,28 @@ app.layout = dbc.Container([
                     'border': '1px solid rgba(15,23,42,0.08)',
                     'boxShadow': '0 2px 12px rgba(15,23,42,0.06)',
                 }),
+            ]),
+            # ══════════════════════════════════════════════════════════════
+            # TAB 6 — ROLE ANALYSIS
+            # ══════════════════════════════════════════════════════════════
+            dbc.Tab(label='Role Analysis', tab_id='roleanalysis', children=[
+                html.Div(style={'height': '16px'}),
+                html.P(
+                    'Compare how different roles — radiologist, technician, front desk, manager, admin — '
+                    'navigate and use the product. Assign roles via the admin API.',
+                    style={'fontSize': '12px', 'color': '#94a3b8', 'marginBottom': '20px'},
+                ),
+
+                # Row 1: usage overview + section time heatmap
+                dbc.Row([
+                    dbc.Col(section_card('Sessions & Users by Role',         'chart-role-usage'),  md=6),
+                    dbc.Col(section_card('Avg Time per Section by Role (s)',  'chart-role-heatmap'), md=6),
+                ], className='g-3 mb-3'),
+
+                # Row 2: depth distribution
+                dbc.Row([
+                    dbc.Col(section_card('Session Path Depth Distribution by Role', 'chart-role-depth'), md=12),
+                ], className='g-3'),
             ]),
         ],
     ),
@@ -469,12 +508,13 @@ def load_patterns(tab):
 @app.callback(
     Output('chart-allflow',   'figure'),
     Output('chart-step-dist', 'figure'),
-    Input('tabs',               'active_tab'),
-    Input('allflow-auth-filter','value'),
-    Input('allflow-sort',       'value'),
-    Input('allflow-max-steps',  'value'),
+    Input('tabs',                'active_tab'),
+    Input('allflow-auth-filter', 'value'),
+    Input('allflow-role-filter', 'value'),
+    Input('allflow-sort',        'value'),
+    Input('allflow-max-steps',   'value'),
 )
-def load_allflow(tab, auth_filter, sort_by, max_steps):
+def load_allflow(tab, auth_filter, role_filter, sort_by, max_steps):
     if tab != 'allflow':
         raise dash.exceptions.PreventUpdate
     max_steps = int(max_steps or 10)
@@ -483,12 +523,34 @@ def load_allflow(tab, auth_filter, sort_by, max_steps):
         df = data.get_all_user_flows()
         if auth_filter and auth_filter != 'all':
             df = df[df['auth_method'] == auth_filter]
-        heatmap  = charts.build_session_heatmap(df, max_steps=max_steps, sort_by=sort_by)
+        if role_filter and role_filter != 'all':
+            df = df[df['role'] == role_filter]
+        heatmap   = charts.build_session_heatmap(df, max_steps=max_steps, sort_by=sort_by)
         step_dist = charts.build_step_distribution(df, max_steps=max_steps)
         return heatmap, step_dist
     except Exception as exc:
         empty = charts._empty(f'DB error: {exc}')
         return empty, empty
+
+
+@app.callback(
+    Output('chart-role-usage',   'figure'),
+    Output('chart-role-heatmap', 'figure'),
+    Output('chart-role-depth',   'figure'),
+    Input('tabs', 'active_tab'),
+)
+def load_role_analysis(tab):
+    if tab != 'roleanalysis':
+        raise dash.exceptions.PreventUpdate
+    try:
+        return (
+            charts.build_role_usage_bars(data.get_role_stats()),
+            charts.build_role_section_heatmap(data.get_role_section_time()),
+            charts.build_role_depth_dist(data.get_role_depth()),
+        )
+    except Exception as exc:
+        empty = charts._empty(f'DB error: {exc}')
+        return empty, empty, empty
 
 
 # ── Path Explorer callbacks ──────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import plotly.graph_objects as go
 import plotly.express as px
+import pandas as pd
 
 
 def _hex_to_rgba(hex_color, alpha):
@@ -512,6 +513,180 @@ def build_dropoff_chart(df):
         font=dict(family='Inter, sans-serif', size=12),
         showlegend=False,
         bargap=0.42,
+    )
+    return fig
+
+
+ROLE_COLORS = {
+    'admin':       '#6366f1',
+    'radiologist': '#0284c7',
+    'technician':  '#059669',
+    'frontdesk':   '#d97706',
+    'manager':     '#dc2626',
+}
+
+ROLE_ORDER = ['admin', 'radiologist', 'technician', 'frontdesk', 'manager']
+
+
+def _to_float(series):
+    """Convert a pandas Series to plain Python floats (handles decimal.Decimal from psycopg2)."""
+    return pd.to_numeric(series, errors='coerce').fillna(0).astype(float).tolist()
+
+
+def _to_int(series):
+    """Convert a pandas Series to plain Python ints."""
+    return pd.to_numeric(series, errors='coerce').fillna(0).astype(int).tolist()
+
+
+def build_role_section_heatmap(df):
+    """
+    Heatmap: rows = roles, columns = sections, color = avg seconds spent.
+    PostgreSQL ROUND/AVG returns decimal.Decimal — must convert to float before Plotly serialises.
+    """
+    if df.empty:
+        return _empty('No role data yet — assign roles to users first')
+
+    sections = ['overview', 'radiology', 'system', 'reports']
+    roles    = [r for r in ROLE_ORDER if r in df['role'].values]
+    if not roles:
+        return _empty('No role data yet')
+
+    df = df.copy()
+    df['avg_sec'] = pd.to_numeric(df['avg_sec'], errors='coerce').fillna(0).astype(float)
+
+    pivot = (
+        df.pivot_table(index='role', columns='section', values='avg_sec', aggfunc='mean')
+          .reindex(index=roles, columns=sections)
+          .fillna(0)
+          .astype(float)
+    )
+
+    hover = [[
+        f'<b>{role.title()} → {sec.title()}</b><br>Avg time: {float(pivot.loc[role, sec]):.1f}s'
+        for sec in sections
+    ] for role in roles]
+
+    fig = go.Figure(go.Heatmap(
+        z=pivot.values.tolist(),
+        x=[s.title() for s in sections],
+        y=[r.title() for r in roles],
+        text=hover,
+        hovertemplate='%{text}<extra></extra>',
+        colorscale='Blues',
+        showscale=True,
+        colorbar=dict(title=dict(text='Avg sec', side='right'),
+                      thickness=14, len=0.8, tickfont=dict(size=10)),
+        xgap=3, ygap=3,
+    ))
+    fig.update_layout(
+        title=dict(text='Avg Time per Section by Role (seconds)',
+                   font=dict(size=13, color='#374151')),
+        height=320,
+        xaxis=dict(side='top', showgrid=False, tickfont=dict(size=12)),
+        yaxis=dict(showgrid=False, tickfont=dict(size=12)),
+        paper_bgcolor='white', plot_bgcolor='white',
+        font=dict(family='Inter, sans-serif', size=12),
+        margin=dict(l=12, r=80, t=60, b=12),
+    )
+    return fig
+
+
+def build_role_usage_bars(df):
+    """
+    Grouped bar: sessions + unique users per role; dotted line = avg session duration.
+    Bug fix: pass titled labels directly as x (not tickvals) to avoid categorical axis corruption.
+    Bug fix: convert Decimal columns to float before passing to Plotly.
+    """
+    if df.empty:
+        return _empty('No role data yet')
+
+    df = df.copy()
+    roles   = df['role'].tolist()
+    labels  = [r.title() for r in roles]        # titled labels go directly into x
+    colors  = [ROLE_COLORS.get(r, '#94a3b8') for r in roles]
+    sessions = _to_int(df['sessions'])
+    users    = _to_int(df['users'])
+    avg_min  = _to_float(df['avg_min'])
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name='Sessions', x=labels, y=sessions,
+        marker_color=[_hex_to_rgba(c, 0.9) for c in colors],
+        marker_line_width=0,
+        text=sessions, textposition='outside',
+        hovertemplate='<b>%{x}</b><br>Sessions: %{y}<extra></extra>',
+    ))
+    fig.add_trace(go.Bar(
+        name='Unique Users', x=labels, y=users,
+        marker_color=[_hex_to_rgba(c, 0.45) for c in colors],
+        marker_line_width=0,
+        text=users, textposition='outside',
+        hovertemplate='<b>%{x}</b><br>Users: %{y}<extra></extra>',
+    ))
+    fig.add_trace(go.Scatter(
+        name='Avg Duration (min)', x=labels, y=avg_min,
+        mode='lines+markers',
+        line=dict(color='#64748b', width=2, dash='dot'),
+        marker=dict(size=8, color='#64748b'),
+        yaxis='y2',
+        hovertemplate='<b>%{x}</b><br>Avg duration: %{y:.1f} min<extra></extra>',
+    ))
+
+    fig.update_layout(
+        barmode='group',
+        title=dict(text='Sessions & Users by Role', font=dict(size=13, color='#374151')),
+        height=340,
+        xaxis=dict(showgrid=False, tickfont=dict(size=12)),
+        yaxis=dict(title='Count', gridcolor='rgba(15,23,42,0.06)'),
+        yaxis2=dict(title='Avg min', overlaying='y', side='right',
+                    showgrid=False, tickfont=dict(color='#64748b')),
+        legend=dict(orientation='h', y=-0.25, font=dict(size=11)),
+        paper_bgcolor='white', plot_bgcolor='#f8fafc',
+        font=dict(family='Inter, sans-serif', size=12),
+        margin=dict(l=12, r=60, t=60, b=60),
+    )
+    return fig
+
+
+def build_role_depth_dist(df):
+    """
+    Line chart: session path depth distribution per role.
+    Each line = one role, x = depth, y = session count.
+    """
+    if df.empty:
+        return _empty('No role data yet')
+
+    df = df.copy()
+    df['depth']    = pd.to_numeric(df['depth'],    errors='coerce').fillna(0).astype(int)
+    df['sessions'] = pd.to_numeric(df['sessions'], errors='coerce').fillna(0).astype(int)
+
+    fig = go.Figure()
+    for role in ROLE_ORDER:
+        sub = df[df['role'] == role].sort_values('depth')
+        if sub.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            name=role.title(),
+            x=sub['depth'].tolist(),
+            y=sub['sessions'].tolist(),
+            mode='lines+markers',
+            line=dict(color=ROLE_COLORS.get(role, '#94a3b8'), width=2.5),
+            marker=dict(size=7, color=ROLE_COLORS.get(role, '#94a3b8'),
+                        line=dict(color='white', width=1.5)),
+            hovertemplate=f'<b>{role.title()}</b><br>Depth %{{x}}: %{{y}} sessions<extra></extra>',
+        ))
+
+    fig.update_layout(
+        title=dict(text='Session Path Depth Distribution by Role',
+                   font=dict(size=13, color='#374151')),
+        height=320,
+        xaxis=dict(title='Path depth (sections visited)', showgrid=False,
+                   dtick=1, tickfont=dict(size=11)),
+        yaxis=dict(title='Sessions', gridcolor='rgba(15,23,42,0.06)'),
+        legend=dict(orientation='h', y=-0.28, font=dict(size=11)),
+        paper_bgcolor='white', plot_bgcolor='#f8fafc',
+        font=dict(family='Inter, sans-serif', size=12),
+        margin=dict(l=12, r=12, t=60, b=60),
     )
     return fig
 
