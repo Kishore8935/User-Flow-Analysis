@@ -67,6 +67,58 @@ LABEL_STYLE = {
     'marginBottom': '6px', 'display': 'block',
 }
 
+_PATH_ACCENTS = ['#6366f1', '#0284c7', '#059669', '#d97706']
+_PATH_HINTS   = ['Starting point', 'Where next?', 'Then what?', 'Final step']
+SECTION_OPTIONS = [
+    {'label': 'Overview',   'value': 'overview'},
+    {'label': 'Radiology',  'value': 'radiology'},
+    {'label': 'System',     'value': 'system'},
+    {'label': 'Reports',    'value': 'reports'},
+]
+
+
+def path_col(step_num, dropdown_id, chart_id, count_id, initially_disabled=True):
+    """One step column in the Path Explorer tab."""
+    accent = _PATH_ACCENTS[step_num - 1]
+    hint   = _PATH_HINTS[step_num - 1]
+    return dbc.Col([
+        html.Div([
+            html.Span(
+                f'STEP {step_num}',
+                style={
+                    'fontSize': '10px', 'fontWeight': '700', 'letterSpacing': '0.1em',
+                    'color': accent, 'background': f'{accent}18',
+                    'padding': '3px 10px', 'borderRadius': '99px',
+                },
+            ),
+            html.Span(hint, style={'fontSize': '11px', 'color': '#94a3b8', 'marginLeft': '8px'}),
+        ], style={'marginBottom': '8px', 'display': 'flex', 'alignItems': 'center'}),
+
+        html.Div('', id=count_id, style={
+            'fontSize': '13px', 'fontWeight': '600', 'color': '#374151',
+            'minHeight': '20px', 'marginBottom': '10px',
+        }),
+
+        dcc.Dropdown(
+            id=dropdown_id,
+            options=SECTION_OPTIONS if step_num == 1 else [],
+            placeholder='Select…',
+            clearable=True,
+            disabled=initially_disabled,
+            style=DROPDOWN_STYLE,
+        ) if dropdown_id else html.Div(style={'height': '36px'}),
+
+        html.Div(style={'height': '12px'}),
+
+        dcc.Loading(
+            dcc.Graph(id=chart_id, config={'displayModeBar': False}),
+            color=accent,
+        ),
+    ], md=3, style={
+        'paddingLeft': '16px', 'paddingRight': '16px',
+        'borderRight': '1px solid rgba(15,23,42,0.07)' if step_num < 4 else 'none',
+    })
+
 # ── Layout ───────────────────────────────────────────────────────────────────
 
 app.layout = dbc.Container([
@@ -162,6 +214,83 @@ app.layout = dbc.Container([
                 dbc.Row([
                     dbc.Col(section_card('Google vs Credentials',          'chart-auth'), md=12),
                 ], className='g-3'),
+            ]),
+
+            # ══════════════════════════════════════════════════════════════
+            # TAB 4 — ALL USERS FLOW
+            # ══════════════════════════════════════════════════════════════
+            dbc.Tab(label='All Users Flow', tab_id='allflow', children=[
+                html.Div(style={'height': '16px'}),
+
+                # Filter row
+                dbc.Row([
+                    dbc.Col([
+                        html.Label('Auth Method', style=LABEL_STYLE),
+                        dcc.Dropdown(
+                            id='allflow-auth-filter',
+                            options=[
+                                {'label': 'All',         'value': 'all'},
+                                {'label': 'Google',      'value': 'google'},
+                                {'label': 'Credentials', 'value': 'credentials'},
+                            ],
+                            value='all',
+                            clearable=False,
+                            style=DROPDOWN_STYLE,
+                        ),
+                    ], md=3),
+                    dbc.Col(
+                        html.Div(
+                            'Each ribbon is one session. Width = number of sessions that took that path. '
+                            'Color = user. Hover a ribbon to see counts.',
+                            style={'marginTop': '22px', 'fontSize': '12px', 'color': '#94a3b8'}
+                        ),
+                        md=9,
+                    ),
+                ], className='mb-4'),
+
+                dbc.Card([
+                    dbc.CardHeader(
+                        html.Span(
+                            'User Navigation Paths  —  ribbon = session  ·  color = user  ·  columns = journey steps',
+                            style={'fontWeight': '700', 'fontSize': '13px', 'color': '#374151'}
+                        ),
+                        style={'background': '#f8fafc', 'border': 'none', 'paddingBottom': '0'},
+                    ),
+                    dbc.CardBody(
+                        dcc.Loading(
+                            dcc.Graph(id='chart-allflow', config={'displayModeBar': False},
+                                      style={'height': '620px'}),
+                            color='#6366f1'
+                        )
+                    ),
+                ], style={'borderRadius': '12px', 'border': '1px solid rgba(15,23,42,0.08)',
+                           'boxShadow': '0 2px 12px rgba(15,23,42,0.06)'}),
+            ]),
+            # ══════════════════════════════════════════════════════════════
+            # TAB 5 — PATH EXPLORER
+            # ══════════════════════════════════════════════════════════════
+            dbc.Tab(label='Path Explorer', tab_id='pathexplorer', children=[
+                html.Div(style={'height': '16px'}),
+                html.P(
+                    'Pick a starting section in Step 1, then drill down step-by-step '
+                    'to see exactly how many sessions followed each route.',
+                    style={'fontSize': '12px', 'color': '#94a3b8', 'marginBottom': '20px'},
+                ),
+                dbc.Card([
+                    dbc.CardBody(
+                        dbc.Row([
+                            path_col(1, 'path-s1', 'path-chart1', 'path-count1', False),
+                            path_col(2, 'path-s2', 'path-chart2', 'path-count2', True),
+                            path_col(3, 'path-s3', 'path-chart3', 'path-count3', True),
+                            path_col(4, None,       'path-chart4', 'path-count4', True),
+                        ], className='g-0', style={'paddingTop': '8px', 'paddingBottom': '8px'}),
+                        style={'padding': '16px 4px'},
+                    ),
+                ], style={
+                    'borderRadius': '12px',
+                    'border': '1px solid rgba(15,23,42,0.08)',
+                    'boxShadow': '0 2px 12px rgba(15,23,42,0.06)',
+                }),
             ]),
         ],
     ),
@@ -285,6 +414,126 @@ def load_patterns(tab):
     except Exception as exc:
         empty = charts._empty(f'DB error: {exc}')
         return empty, empty, empty
+
+
+@app.callback(
+    Output('chart-allflow', 'figure'),
+    Input('tabs', 'active_tab'),
+    Input('allflow-auth-filter', 'value'),
+)
+def load_allflow(tab, auth_filter):
+    if tab != 'allflow':
+        raise dash.exceptions.PreventUpdate
+    try:
+        df = data.get_all_user_flows()
+        if auth_filter and auth_filter != 'all':
+            df = df[df['auth_method'] == auth_filter]
+        return charts.build_alluvial(df)
+    except Exception as exc:
+        return charts._empty(f'DB error: {exc}')
+
+
+# ── Path Explorer callbacks ──────────────────────────────────────────────────
+
+@app.callback(
+    Output('path-chart1', 'figure'),
+    Output('path-count1', 'children'),
+    Input('tabs',    'active_tab'),
+    Input('path-s1', 'value'),
+)
+def path_step1(tab, s1):
+    if tab != 'pathexplorer':
+        raise dash.exceptions.PreventUpdate
+    try:
+        df    = data.get_path_continuation([])
+        total = int(df['sessions'].sum()) if not df.empty else 0
+        return charts.build_path_bars(df, selected=s1), f'{total:,} sessions'
+    except Exception as exc:
+        return charts._empty(f'DB error: {exc}'), ''
+
+
+@app.callback(
+    Output('path-s2',     'options'),
+    Output('path-s2',     'disabled'),
+    Output('path-chart2', 'figure'),
+    Output('path-count2', 'children'),
+    Input('path-s1', 'value'),
+    Input('path-s2', 'value'),
+)
+def path_step2(s1, s2):
+    if not s1:
+        return [], True, charts._empty('← Select a starting section in Step 1'), ''
+    try:
+        df    = data.get_path_continuation([s1])
+        total = int(df['sessions'].sum()) if not df.empty else 0
+        opts  = [
+            {'label': r['next_section'].title(), 'value': r['next_section']}
+            for _, r in df.iterrows() if r['next_section'] != '(session ended)'
+        ]
+        return opts, False, charts.build_path_bars(df, selected=s2), f'{total:,} sessions'
+    except Exception as exc:
+        return [], True, charts._empty(f'DB error: {exc}'), ''
+
+
+@app.callback(
+    Output('path-s3',     'options'),
+    Output('path-s3',     'disabled'),
+    Output('path-chart3', 'figure'),
+    Output('path-count3', 'children'),
+    Input('path-s1', 'value'),
+    Input('path-s2', 'value'),
+    Input('path-s3', 'value'),
+)
+def path_step3(s1, s2, s3):
+    if not s1 or not s2:
+        return [], True, charts._empty('← Complete Steps 1 & 2 first'), ''
+    try:
+        df    = data.get_path_continuation([s1, s2])
+        total = int(df['sessions'].sum()) if not df.empty else 0
+        opts  = [
+            {'label': r['next_section'].title(), 'value': r['next_section']}
+            for _, r in df.iterrows() if r['next_section'] != '(session ended)'
+        ]
+        return opts, False, charts.build_path_bars(df, selected=s3), f'{total:,} sessions'
+    except Exception as exc:
+        return [], True, charts._empty(f'DB error: {exc}'), ''
+
+
+@app.callback(
+    Output('path-chart4', 'figure'),
+    Output('path-count4', 'children'),
+    Input('path-s1', 'value'),
+    Input('path-s2', 'value'),
+    Input('path-s3', 'value'),
+)
+def path_step4(s1, s2, s3):
+    if not s1 or not s2 or not s3:
+        return charts._empty('← Complete Steps 1 – 3 first'), ''
+    try:
+        df    = data.get_path_continuation([s1, s2, s3])
+        total = int(df['sessions'].sum()) if not df.empty else 0
+        return charts.build_path_bars(df), f'{total:,} sessions'
+    except Exception as exc:
+        return charts._empty(f'DB error: {exc}'), ''
+
+
+# Cascade resets — changing an earlier step clears all downstream selections
+@app.callback(
+    Output('path-s2', 'value'),
+    Input('path-s1', 'value'),
+    prevent_initial_call=True,
+)
+def reset_path_s2(_):
+    return None
+
+
+@app.callback(
+    Output('path-s3', 'value'),
+    Input('path-s2', 'value'),
+    prevent_initial_call=True,
+)
+def reset_path_s3(_):
+    return None
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

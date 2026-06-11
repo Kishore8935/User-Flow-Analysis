@@ -115,6 +115,60 @@ def get_auth_comparison():
     """)
 
 
+def get_path_continuation(path):
+    """
+    Given an ordered list of sections already taken (e.g. ['overview', 'radiology']),
+    returns the distribution of what users visited at the NEXT step.
+    Empty path → distribution of first sections across all sessions.
+    """
+    n        = len(path)
+    next_idx = n + 1  # PostgreSQL arrays are 1-indexed
+
+    if n == 0:
+        return _query("""
+            SELECT
+                section_flow[1]                                             AS next_section,
+                COUNT(*)                                                    AS sessions,
+                ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)         AS pct
+            FROM analytics_sessions
+            WHERE section_flow[1] IS NOT NULL
+            GROUP BY next_section
+            ORDER BY sessions DESC
+        """)
+
+    conditions = ' AND '.join(f"section_flow[{i + 1}] = %s" for i in range(n))
+    sql = f"""
+        SELECT
+            COALESCE(section_flow[{next_idx}], '(session ended)')          AS next_section,
+            COUNT(*)                                                        AS sessions,
+            ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)             AS pct
+        FROM analytics_sessions
+        WHERE {conditions}
+        GROUP BY next_section
+        ORDER BY sessions DESC
+    """
+    return _query(sql, tuple(path))
+
+
+def get_all_user_flows():
+    """One row per session — section_flow pivoted into step_1…step_4 columns."""
+    return _query("""
+        SELECT
+            s.session_id,
+            COALESCE(u.name, u.email, 'User #' || u.id::text) AS user_label,
+            s.auth_method,
+            s.section_flow[1] AS step_1,
+            s.section_flow[2] AS step_2,
+            s.section_flow[3] AS step_3,
+            s.section_flow[4] AS step_4,
+            array_length(s.section_flow, 1) AS depth
+        FROM analytics_sessions s
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE array_length(s.section_flow, 1) >= 1
+        ORDER BY s.started_at DESC
+    """)
+
+
 def get_kpis():
     row = _query("""
         SELECT

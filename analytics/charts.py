@@ -1,6 +1,13 @@
 import plotly.graph_objects as go
 import plotly.express as px
 
+
+def _hex_to_rgba(hex_color, alpha):
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f'rgba({r},{g},{b},{alpha})'
+
+
 COLORS = {
     'overview':  '#0284c7',
     'radiology': '#6366f1',
@@ -222,6 +229,142 @@ def build_funnel(df):
         font=dict(family='Inter, sans-serif', size=12),
         paper_bgcolor='white',
         margin=dict(l=12, r=12, t=60, b=12),
+    )
+    return fig
+
+
+def build_path_bars(df, selected=None):
+    """
+    Horizontal bar chart showing next-step distribution for the path explorer.
+    `selected` = the section currently chosen at this step (dims that bar to full,
+    others to 30% opacity).
+    """
+    if df.empty:
+        return _empty()
+
+    df = df.copy()
+    display, bar_colors, text_labels = [], [], []
+
+    for _, row in df.iterrows():
+        s = row['next_section']
+        is_ended = s == '(session ended)'
+        label    = '↩  Ended here' if is_ended else s.title()
+        base     = '#94a3b8' if is_ended else COLORS.get(s.lower(), '#94a3b8')
+
+        if selected is None:
+            color = base
+        elif s.lower() == selected.lower():
+            color = base
+        else:
+            color = _hex_to_rgba(base, 0.25)
+
+        display.append(label)
+        bar_colors.append(color)
+        text_labels.append(f"  {int(row['sessions'])}  ({row['pct']}%)")
+
+    fig = go.Figure(go.Bar(
+        x=df['sessions'].tolist(),
+        y=display,
+        orientation='h',
+        marker_color=bar_colors,
+        text=text_labels,
+        textposition='outside',
+        cliponaxis=False,
+        hovertemplate='%{y}: %{x} sessions<extra></extra>',
+        marker_line_width=0,
+    ))
+
+    fig.update_layout(
+        height=max(160, 48 + len(df) * 56),
+        xaxis=dict(
+            showgrid=False, showticklabels=False, showline=False, zeroline=False,
+            range=[0, df['sessions'].max() * 1.55],
+        ),
+        yaxis=dict(
+            showgrid=False, showline=False, zeroline=False,
+            tickfont=dict(size=13, color='#374151'),
+            automargin=True,
+        ),
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        margin=dict(l=4, r=8, t=8, b=8),
+        font=dict(family='Inter, sans-serif', size=12),
+        showlegend=False,
+        bargap=0.38,
+    )
+    return fig
+
+
+def build_alluvial(df):
+    """Parallel categories chart — one ribbon per session, colored by user."""
+    if df.empty:
+        return _empty('No session data yet')
+
+    STEP_COLS   = ['step_1', 'step_2', 'step_3', 'step_4']
+    STEP_LABELS = ['1st Section', '2nd Section', '3rd Section', '4th Section']
+    PALETTE     = ['#6366f1', '#0284c7', '#059669', '#d97706',
+                   '#dc2626', '#8b5cf6', '#ec4899', '#14b8a6']
+
+    # Keep only steps that at least one session reached
+    active = [(c, l) for c, l in zip(STEP_COLS, STEP_LABELS)
+              if c in df.columns and df[c].notna().any()]
+
+    if len(active) < 2:
+        return _empty('Need sessions that visit at least 2 different sections')
+
+    df = df.copy()
+    for col, _ in active:
+        df[col] = df[col].fillna('—').str.title()
+
+    # Assign a normalised float per unique user for the continuous colorscale
+    users = df['user_label'].fillna('Unknown').unique().tolist()
+    n     = len(users)
+    norm  = {u: (i / max(n - 1, 1)) for i, u in enumerate(users)}
+
+    if n == 1:
+        colorscale = [[0, PALETTE[0]], [1, PALETTE[0]]]
+    else:
+        colorscale = [[i / (n - 1), PALETTE[i % len(PALETTE)]] for i in range(n)]
+
+    color_vals = df['user_label'].fillna('Unknown').map(norm).tolist()
+
+    dims = [
+        go.parcats.Dimension(
+            values=df[col].tolist(),
+            label=label,
+            categoryorder='category ascending',
+        )
+        for col, label in active
+    ]
+
+    fig = go.Figure(go.Parcats(
+        dimensions=dims,
+        line=dict(
+            color=color_vals,
+            colorscale=colorscale,
+            shape='hspline',
+            colorbar=dict(
+                title=dict(text='User', side='right'),
+                tickvals=[norm[u] for u in users],
+                ticktext=[u[:20] for u in users],  # truncate long emails
+                thickness=14,
+                len=0.85,
+                outlinewidth=0,
+            ),
+        ),
+        hoveron='color',
+        hoverinfo='count+probability',
+        arrangement='freeform',
+        bundlecolors=False,
+        labelfont=dict(family='Inter, sans-serif', size=12, color='#374151'),
+        tickfont=dict(family='Inter, sans-serif', size=11, color='#6b7280'),
+    ))
+
+    fig.update_layout(
+        height=600,
+        font=dict(family='Inter, sans-serif', size=12),
+        paper_bgcolor='white',
+        margin=dict(l=20, r=140, t=40, b=30),
     )
     return fig
 
