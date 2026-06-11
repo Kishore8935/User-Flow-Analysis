@@ -281,8 +281,12 @@ def get_kpis():
            GROUP BY section
            ORDER BY COUNT(*) DESC
            LIMIT 1)                                                              AS top_section,
-          (SELECT ROUND(
-             AVG(EXTRACT(EPOCH FROM (last_seen_at - started_at)) / 60.0), 1
-           ) FROM analytics_sessions)                                            AS avg_min
+          (SELECT ROUND(AVG(session_ms) / 60000.0, 1)
+           FROM (
+               SELECT SUM(time_spent_ms) AS session_ms
+               FROM analytics_events
+               WHERE event = 'section_exit' AND time_spent_ms IS NOT NULL
+               GROUP BY session_id
+           ) t)                                                                  AS avg_min
     """)
     return row.iloc[0].to_dict() if not row.empty else {}
