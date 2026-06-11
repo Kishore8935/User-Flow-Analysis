@@ -137,7 +137,8 @@ async function upsertAnalyticsSession({ session_id, user_id, auth_method, sectio
            user_id      = COALESCE(EXCLUDED.user_id, analytics_sessions.user_id),
            auth_method  = COALESCE(EXCLUDED.auth_method, analytics_sessions.auth_method),
            section_flow = CASE
-             WHEN $4 = ANY(analytics_sessions.section_flow) THEN analytics_sessions.section_flow
+             WHEN analytics_sessions.section_flow[array_length(analytics_sessions.section_flow,1)] = $4
+               THEN analytics_sessions.section_flow
              ELSE analytics_sessions.section_flow || ARRAY[$4]::TEXT[]
            END`,
     [session_id, user_id || null, auth_method || null, section]

@@ -119,6 +119,7 @@ def get_path_continuation(path):
     """
     Given an ordered list of sections already taken (e.g. ['overview', 'radiology']),
     returns the distribution of what users visited at the NEXT step.
+    Builds sequences from analytics_events so revisits are captured correctly.
     Empty path → distribution of first sections across all sessions.
     """
     n        = len(path)
@@ -126,23 +127,35 @@ def get_path_continuation(path):
 
     if n == 0:
         return _query("""
-            SELECT
-                section_flow[1]                                             AS next_section,
-                COUNT(*)                                                    AS sessions,
-                ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)         AS pct
-            FROM analytics_sessions
-            WHERE section_flow[1] IS NOT NULL
+            WITH seqs AS (
+                SELECT session_id,
+                       ARRAY_AGG(section ORDER BY flow_position, ts) AS seq
+                FROM analytics_events
+                WHERE event = 'section_enter'
+                GROUP BY session_id
+            )
+            SELECT seq[1]                                                       AS next_section,
+                   COUNT(*)                                                     AS sessions,
+                   ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)          AS pct
+            FROM seqs
+            WHERE seq[1] IS NOT NULL
             GROUP BY next_section
             ORDER BY sessions DESC
         """)
 
-    conditions = ' AND '.join(f"section_flow[{i + 1}] = %s" for i in range(n))
+    conditions = ' AND '.join(f"seq[{i + 1}] = %s" for i in range(n))
     sql = f"""
-        SELECT
-            COALESCE(section_flow[{next_idx}], '(session ended)')          AS next_section,
-            COUNT(*)                                                        AS sessions,
-            ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)             AS pct
-        FROM analytics_sessions
+        WITH seqs AS (
+            SELECT session_id,
+                   ARRAY_AGG(section ORDER BY flow_position, ts) AS seq
+            FROM analytics_events
+            WHERE event = 'section_enter'
+            GROUP BY session_id
+        )
+        SELECT COALESCE(seq[{next_idx}], '(session ended)')                AS next_section,
+               COUNT(*)                                                     AS sessions,
+               ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)          AS pct
+        FROM seqs
         WHERE {conditions}
         GROUP BY next_section
         ORDER BY sessions DESC
@@ -151,21 +164,54 @@ def get_path_continuation(path):
 
 
 def get_all_user_flows():
-    """One row per session — section_flow pivoted into step_1…step_4 columns."""
+    """One row per session — full ordered sequence as a raw list (includes revisits).
+    Rebuilt from analytics_events so variable-length paths are captured correctly."""
     return _query("""
+        WITH seqs AS (
+            SELECT e.session_id,
+                   ARRAY_AGG(e.section ORDER BY e.flow_position, e.ts) AS seq,
+                   COUNT(*)::int                                        AS depth
+            FROM analytics_events e
+            WHERE e.event = 'section_enter'
+            GROUP BY e.session_id
+        )
         SELECT
-            s.session_id,
-            COALESCE(u.name, u.email, 'User #' || u.id::text) AS user_label,
+            seqs.session_id,
+            seqs.seq,
+            seqs.depth,
+            COALESCE(u.name, u.email, 'User #' || u.id::text)                   AS user_label,
             s.auth_method,
-            s.section_flow[1] AS step_1,
-            s.section_flow[2] AS step_2,
-            s.section_flow[3] AS step_3,
-            s.section_flow[4] AS step_4,
-            array_length(s.section_flow, 1) AS depth
-        FROM analytics_sessions s
+            TO_CHAR(s.started_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI') AS started_fmt,
+            s.started_at
+        FROM seqs
+        JOIN analytics_sessions s ON s.session_id = seqs.session_id
         LEFT JOIN users u ON u.id = s.user_id
-        WHERE array_length(s.section_flow, 1) >= 1
         ORDER BY s.started_at DESC
+    """)
+
+
+def get_dropoff_stats():
+    """For each session, find the last section the user was in when they left.
+    Returns distribution of exit sections + avg session duration."""
+    return _query("""
+        WITH last_exits AS (
+            SELECT DISTINCT ON (session_id)
+                session_id, section
+            FROM analytics_events
+            WHERE event = 'section_exit'
+            ORDER BY session_id, ts DESC
+        )
+        SELECT
+            le.section                                                              AS exit_section,
+            COUNT(*)                                                                AS sessions,
+            ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)                     AS pct,
+            ROUND(AVG(
+                EXTRACT(EPOCH FROM (s.last_seen_at - s.started_at)) / 60.0
+            ), 1)                                                                   AS avg_min
+        FROM last_exits le
+        JOIN analytics_sessions s ON s.session_id = le.session_id
+        GROUP BY le.section
+        ORDER BY sessions DESC
     """)
 
 

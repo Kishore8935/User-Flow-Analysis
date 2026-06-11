@@ -295,76 +295,223 @@ def build_path_bars(df, selected=None):
     return fig
 
 
-def build_alluvial(df):
-    """Parallel categories chart — one ribbon per session, colored by user."""
+def build_session_heatmap(df, max_steps=10, sort_by='date'):
+    """
+    2D heatmap: rows = sessions (variable length), columns = step positions.
+    Color = section at that step. Gray = session ended before reaching that step.
+    Handles any path depth — no fixed column cap on the data side.
+    """
     if df.empty:
         return _empty('No session data yet')
 
-    STEP_COLS   = ['step_1', 'step_2', 'step_3', 'step_4']
-    STEP_LABELS = ['1st Section', '2nd Section', '3rd Section', '4th Section']
-    PALETTE     = ['#6366f1', '#0284c7', '#059669', '#d97706',
-                   '#dc2626', '#8b5cf6', '#ec4899', '#14b8a6']
-
-    # Keep only steps that at least one session reached
-    active = [(c, l) for c, l in zip(STEP_COLS, STEP_LABELS)
-              if c in df.columns and df[c].notna().any()]
-
-    if len(active) < 2:
-        return _empty('Need sessions that visit at least 2 different sections')
-
     df = df.copy()
-    for col, _ in active:
-        df[col] = df[col].fillna('—').str.title()
 
-    # Assign a normalised float per unique user for the continuous colorscale
-    users = df['user_label'].fillna('Unknown').unique().tolist()
-    n     = len(users)
-    norm  = {u: (i / max(n - 1, 1)) for i, u in enumerate(users)}
-
-    if n == 1:
-        colorscale = [[0, PALETTE[0]], [1, PALETTE[0]]]
+    # Sort
+    if sort_by == 'depth':
+        df = df.sort_values('depth', ascending=False).reset_index(drop=True)
+    elif sort_by == 'user':
+        df = df.sort_values(['user_label', 'started_at']).reset_index(drop=True)
     else:
-        colorscale = [[i / (n - 1), PALETTE[i % len(PALETTE)]] for i in range(n)]
+        df = df.sort_values('started_at', ascending=False).reset_index(drop=True)
 
-    color_vals = df['user_label'].fillna('Unknown').map(norm).tolist()
+    actual_max = int(df['depth'].max()) if not df.empty else 1
+    n_cols     = min(max_steps, actual_max)
+    n_rows     = len(df)
 
-    dims = [
-        go.parcats.Dimension(
-            values=df[col].tolist(),
-            label=label,
-            categoryorder='category ascending',
-        )
-        for col, label in active
+    # section → integer (0 = ended/gray)
+    S_INT = {'overview': 1, 'radiology': 2, 'system': 3, 'reports': 4}
+
+    z_matrix, hover_matrix, y_labels = [], [], []
+
+    for _, row in df.iterrows():
+        seq = row['seq']
+        if not isinstance(seq, list):
+            seq = list(seq) if seq else []
+
+        z_row, h_row = [], []
+        for i in range(n_cols):
+            if i < len(seq):
+                s = seq[i]
+                z_row.append(S_INT.get(s, 0))
+                h_row.append(f'<b>Step {i + 1}</b>: {s.title()}')
+            else:
+                z_row.append(0)
+                h_row.append(f'<b>Step {i + 1}</b>: session ended')
+
+        z_matrix.append(z_row)
+        hover_matrix.append(h_row)
+
+        user  = str(row['user_label'])[:16]
+        label = f"{user}  ·  {row['started_fmt']}"
+        y_labels.append(label)
+
+    # Discrete colorscale: 5 bands for values 0-4 (zmin=0, zmax=4)
+    # Normalised positions: 0→0.0, 1→0.25, 2→0.5, 3→0.75, 4→1.0
+    CSCALE = [
+        [0.00, '#e8edf2'], [0.20, '#e8edf2'],   # 0: ended
+        [0.20, '#0284c7'], [0.40, '#0284c7'],   # 1: overview
+        [0.40, '#6366f1'], [0.60, '#6366f1'],   # 2: radiology
+        [0.60, '#059669'], [0.80, '#059669'],   # 3: system
+        [0.80, '#d97706'], [1.00, '#d97706'],   # 4: reports
     ]
 
-    fig = go.Figure(go.Parcats(
-        dimensions=dims,
-        line=dict(
-            color=color_vals,
-            colorscale=colorscale,
-            shape='hspline',
-            colorbar=dict(
-                title=dict(text='User', side='right'),
-                tickvals=[norm[u] for u in users],
-                ticktext=[u[:20] for u in users],  # truncate long emails
-                thickness=14,
-                len=0.85,
-                outlinewidth=0,
+    fig = go.Figure()
+
+    fig.add_trace(go.Heatmap(
+        z=z_matrix,
+        text=hover_matrix,
+        hovertemplate='%{text}<extra></extra>',
+        colorscale=CSCALE,
+        zmin=0, zmax=4,
+        showscale=False,
+        xgap=3, ygap=2,
+        name='',
+    ))
+
+    # Legend as invisible scatter markers
+    for name, color, edge in [
+        ('Overview',          '#0284c7', False),
+        ('Radiology',         '#6366f1', False),
+        ('System',            '#059669', False),
+        ('Reports',           '#d97706', False),
+        ('Ended / not reached', '#e8edf2', True),
+    ]:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode='markers',
+            marker=dict(
+                symbol='square', size=12, color=color,
+                line=dict(color='#94a3b8', width=1) if edge else dict(width=0),
             ),
+            name=name, showlegend=True,
+        ))
+
+    fig.update_xaxes(
+        tickvals=list(range(n_cols)),
+        ticktext=[f'Step {i + 1}' for i in range(n_cols)],
+        side='top',
+        tickfont=dict(size=11, color='#64748b', family='Inter, sans-serif'),
+        showgrid=False,
+    )
+    fig.update_yaxes(
+        tickvals=list(range(n_rows)),
+        ticktext=y_labels,
+        tickfont=dict(size=10, color='#374151', family='Inter, sans-serif'),
+        autorange='reversed',
+        showgrid=False,
+        automargin=True,
+    )
+    fig.update_layout(
+        height=max(320, 60 + n_rows * 30),
+        margin=dict(l=8, r=20, t=60, b=20),
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        font=dict(family='Inter, sans-serif', size=11),
+        legend=dict(
+            orientation='h', y=-0.06,
+            font=dict(size=11), itemsizing='constant',
         ),
-        hoveron='color',
-        hoverinfo='count+probability',
-        arrangement='freeform',
-        bundlecolors=False,
-        labelfont=dict(family='Inter, sans-serif', size=12, color='#374151'),
-        tickfont=dict(family='Inter, sans-serif', size=11, color='#6b7280'),
+    )
+    return fig
+
+
+def build_step_distribution(df, max_steps=10):
+    """
+    Stacked bar: at each step position, how many sessions visited which section.
+    The 'Ended' slice shows how many sessions had already stopped by that step.
+    """
+    if df.empty:
+        return _empty()
+
+    SECTIONS   = ['overview', 'radiology', 'system', 'reports']
+    actual_max = int(df['depth'].max()) if not df.empty else 1
+    n_cols     = min(max_steps, actual_max)
+
+    step_counts = {s: [0] * n_cols for s in SECTIONS}
+    step_ended  = [0] * n_cols
+
+    for _, row in df.iterrows():
+        seq = row['seq']
+        if not isinstance(seq, list):
+            seq = list(seq) if seq else []
+        for i in range(n_cols):
+            if i < len(seq):
+                s = seq[i]
+                if s in step_counts:
+                    step_counts[s][i] += 1
+            else:
+                step_ended[i] += 1
+
+    x_labels = [f'Step {i + 1}' for i in range(n_cols)]
+
+    fig = go.Figure()
+    for section in SECTIONS:
+        fig.add_trace(go.Bar(
+            name=section.title(), x=x_labels, y=step_counts[section],
+            marker_color=COLORS[section], marker_line_width=0,
+            hovertemplate=f'<b>%{{x}}</b><br>{section.title()}: %{{y}}<extra></extra>',
+        ))
+    fig.add_trace(go.Bar(
+        name='Ended / not reached', x=x_labels, y=step_ended,
+        marker_color='#e2e8f0', marker_line_width=0,
+        hovertemplate='<b>%{x}</b><br>Ended: %{y}<extra></extra>',
     ))
 
     fig.update_layout(
-        height=600,
+        barmode='stack',
+        title=dict(text='Step Distribution  (aggregate across all sessions)',
+                   font=dict(size=13, color='#374151')),
+        height=300,
+        xaxis=dict(tickfont=dict(size=11), showgrid=False),
+        yaxis=dict(title='Sessions', gridcolor='rgba(15,23,42,0.06)'),
+        legend=dict(orientation='h', y=-0.35, font=dict(size=11)),
+        paper_bgcolor='white', plot_bgcolor='#f8fafc',
         font=dict(family='Inter, sans-serif', size=12),
+        margin=dict(l=12, r=12, t=48, b=60),
+    )
+    return fig
+
+
+def build_dropoff_chart(df):
+    """Horizontal bar — which section users were in when they last exited."""
+    if df.empty:
+        return _empty()
+
+    bar_colors  = [COLORS.get(s, '#94a3b8') for s in df['exit_section']]
+    text_labels = [
+        f"  {int(r['sessions'])}  ({r['pct']}%)   avg {r['avg_min']} min/session"
+        for _, r in df.iterrows()
+    ]
+
+    fig = go.Figure(go.Bar(
+        x=df['sessions'].tolist(),
+        y=df['exit_section'].str.title().tolist(),
+        orientation='h',
+        marker_color=bar_colors,
+        marker_line_width=0,
+        text=text_labels,
+        textposition='outside',
+        cliponaxis=False,
+        hovertemplate='%{y}: %{x} sessions<extra></extra>',
+    ))
+
+    fig.update_layout(
+        title=dict(
+            text='Drop-off Section  (last page before user left)',
+            font=dict(size=13, color='#374151'),
+        ),
+        height=max(160, 48 + len(df) * 58),
+        xaxis=dict(
+            showgrid=False, showticklabels=False, showline=False, zeroline=False,
+            range=[0, df['sessions'].max() * 1.75],
+        ),
+        yaxis=dict(showgrid=False, showline=False, zeroline=False,
+                   tickfont=dict(size=13, color='#374151'), automargin=True),
         paper_bgcolor='white',
-        margin=dict(l=20, r=140, t=40, b=30),
+        plot_bgcolor='white',
+        margin=dict(l=4, r=8, t=48, b=8),
+        font=dict(family='Inter, sans-serif', size=12),
+        showlegend=False,
+        bargap=0.42,
     )
     return fig
 
